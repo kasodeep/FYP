@@ -1,0 +1,18 @@
+#separator \x09
+#set_separator	,
+#empty_field	(empty)
+#unset_field	-
+#path	conn
+#open	2025-10-31-00-00-00
+#fields	ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	proto	service	duration	orig_bytes	resp_bytes	conn_state	missed_bytes	history	orig_pkts	orig_ip_bytes	resp_pkts	resp_ip_bytes
+#types	time	string	addr	port	addr	port	enum	string	interval	count	count	string	count	string	count	count	count	count
+1698710400.000000	CHhAvVGS1DHFjwGM9	192.168.1.100	52431	10.0.0.15	3306	tcp	mysql	3.142	1024	2048	S1	0	ShADad	12	1200	10	1000
+1698710410.000000	CUM0KZ3MLUfNB0cl11	192.168.1.105	49212	10.0.0.16	80	tcp	http	2.718	512	8192	SF	0	ShADadFf	8	600	15	9000
+1698710420.000000	Cyt8Y44NHqJZgK6L1c	192.168.1.110	55123	10.0.0.17	443	tcp	ssl	1.414	2048	4096	SF	0	ShADadFf	20	2500	18	4500
+1698710430.000000	CeHjAZ3py0VOJrZH5	192.168.1.120	60123	10.0.0.18	80	tcp	http	0.707	256	1024	S0	0	ShA	4	300	2	100
+1698710440.000000	CNv2Xc1UXpGfqrMa8	192.168.1.130	49322	10.0.0.19	8080	tcp	http-alt	5.000	4096	16384	SF	0	ShADadFf	30	5000	25	18000
+1698710450.000000	C8XFkb3OWqLpVtEu7	192.168.1.140	51234	10.0.0.20	22	tcp	ssh	1.618	512	2048	SF	0	ShADadFf	15	800	12	1500
+1698710460.000000	CPmNj5QRzK9GyHcW4	192.168.1.150	53214	10.0.0.21	53	udp	dns	0.125	128	512	SF	0	Dd	2	200	1	600
+1698710470.000000	CwTvB2aEsLxUmYnR9	192.168.1.160	49123	10.0.0.22	21	tcp	ftp	2.236	384	1536	SF	0	ShADadFf	6	500	8	2000
+1698710480.000000	CAkDf6ZqXcNhWmSg3	192.168.1.170	55321	10.0.0.23	445	tcp	smb	0.866	768	3072	REJ	0	ShR	3	400	1	100
+1698710490.000000	CrJxM8nQuPyEtVbL2	192.168.1.180	0	10.0.0.24	0	icmp	-	0.500	64	64	OTH	0	-	100	6400	100	6400

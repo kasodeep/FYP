@@ -1,0 +1,15 @@
+[**] [1:1000001:1] SQL Injection Attempt [**] [Priority: 1] {TCP} 192.168.1.100:52431 -> 10.0.0.15:3306
+[**] [1:1000001:1] SQL Injection Attempt [**] [Priority: 1] {TCP} 192.168.1.100:52431 -> 10.0.0.15:3306
+[**] [1:1000002:1] Potential XSS Attack [**] [Priority: 2] {TCP} 192.168.1.105:49212 -> 10.0.0.16:80
+[**] [1:1000003:1] Suspicious File Download [**] [Priority: 2] {TCP} 192.168.1.110:55123 -> 10.0.0.17:443
+[**] [1:1000004:1] Port Scan Detected [**] [Priority: 3] {TCP} 192.168.1.120:0 -> 10.0.0.18:*
+[**] [1:1000004:1] Port Scan Detected [**] [Priority: 3] {TCP} 192.168.1.120:0 -> 10.0.0.18:*
+[**] [1:1000005:1] Malware Command and Control Traffic [**] [Priority: 3] {TCP} 192.168.1.130:49322 -> 10.0.0.19:8080
+[**] [1:1000006:1] SSH Brute Force Attempt [**] [Priority: 2] {TCP} 192.168.1.140:51234 -> 10.0.0.20:22
+[**] [1:1000007:1] DNS Zone Transfer [**] [Priority: 1] {UDP} 192.168.1.150:53214 -> 10.0.0.21:53
+[**] [1:1000008:1] FTP Anonymous Login [**] [Priority: 1] {TCP} 192.168.1.160:49123 -> 10.0.0.22:21
+[**] [1:1000009:1] SMB Authentication Failure [**] [Priority: 2] {TCP} 192.168.1.170:55321 -> 10.0.0.23:445
+[**] [1:1000010:1] ICMP Flood [**] [Priority: 3] {ICMP} 192.168.1.180:0 -> 10.0.0.24:0
+[**] [1:1000010:1] ICMP Flood [**] [Priority: 3] {ICMP} 192.168.1.180:0 -> 10.0.0.24:0
+[**] [1:1000008:1] FTP Anonymous Login [**] [Priority: 1] {TCP} 192.168.1.160:49123 -> 10.0.0.22:21
+[**] [1:1000008:1] FTP Anonymous Login [**] [Priority: 1] {TCP} 192.168.1.160:49123 -> 10.0.0.22:21

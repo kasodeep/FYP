@@ -1,0 +1,13 @@
+#separator \x09
+#set_separator	,
+#empty_field	(empty)
+#unset_field	-
+#path	dns
+#open	2025-10-31-00-00-00
+#fields	ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	proto	trans_id	rtt	query	qclass	qclass_name	qtype	qtype_name	rcode	rcode_name	AA	TC	RD	RA	Z	answers	TTLs	rejected
+#types	time	string	addr	port	addr	port	enum	count	interval	string	count	string	count	string	count	string	bool	bool	bool	bool	count	vector[string]	vector[interval]	bool
+1698710460.000000	CPmNj5QRzK9GyHcW4	192.168.1.150	53214	10.0.0.21	53	udp	1234	0.125	example.com	1	C_INTERNET	1	A	0	NOERROR	F	F	T	T	0	192.0.2.1,192.0.2.2	3600.000000,3600.000000	F
+1698710461.000000	CKqWs4TvNmBgLpXr7	192.168.1.151	54321	10.0.0.21	53	udp	1235	0.130	mail.example.com	1	C_INTERNET	15	MX	0	NOERROR	F	F	T	T	0	mail1.example.com,mail2.example.com	3600.000000,3600.000000	F
+1698710462.000000	CHjYn2RxPdMfKtWv9	192.168.1.152	55432	10.0.0.21	53	udp	1236	0.128	malicious.example.com	1	C_INTERNET	1	A	3	NXDOMAIN	F	F	T	T	0	-	-	T
+1698710463.000000	CBgUm6ZsLqNcXhTp5	192.168.1.153	56789	10.0.0.21	53	udp	1237	0.122	api.example.com	1	C_INTERNET	28	AAAA	0	NOERROR	F	F	T	T	0	2001:db8::1,2001:db8::2	3600.000000,3600.000000	F
+1698710464.000000	CFnVk8WxJyHmRtSq3	192.168.1.154	57890	10.0.0.21	53	udp	1238	0.135	cdn.example.com	1	C_INTERNET	5	CNAME	0	NOERROR	F	F	T	T	0	cdn.cloudprovider.com	3600.000000	F

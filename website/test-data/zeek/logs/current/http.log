@@ -1,0 +1,12 @@
+#separator \x09
+#set_separator	,
+#empty_field	(empty)
+#unset_field	-
+#path	http
+#open	2025-10-31-00-00-00
+#fields	ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	trans_depth	method	host	uri	referrer	version	user_agent	request_body_len	response_body_len	status_code	status_msg	info_code	info_msg	tags	username	password	proxied	orig_fuids	orig_filenames	orig_mime_types	resp_fuids	resp_filenames	resp_mime_types
+#types	time	string	addr	port	addr	port	count	string	string	string	string	string	string	count	count	count	string	count	string	set[enum]	string	string	set[string]	vector[string]	vector[string]	vector[string]	vector[string]	vector[string]	vector[string]
+1698710410.000000	CUM0KZ3MLUfNB0cl11	192.168.1.105	49212	10.0.0.16	80	1	GET	example.com	/login.php	-	1.1	Mozilla/5.0	0	2048	200	OK	-	-	(empty)	-	-	-	-	-	-	FXxXxx4IlN9MLpv8hk	-	text/html
+1698710420.000000	Cyt8Y44NHqJZgK6L1c	192.168.1.110	55123	10.0.0.17	443	1	POST	secure.example.com	/download	-	1.1	Mozilla/5.0	1024	4096	200	OK	-	-	(empty)	-	-	-	-	-	-	FOo9Uu3JhK8NqWs2pm	-	application/pdf
+1698710430.000000	CeHjAZ3py0VOJrZH5	192.168.1.120	60123	10.0.0.18	80	1	GET	malicious.example.com	/script.js	-	1.1	Mozilla/5.0	0	1024	403	Forbidden	-	-	(empty)	-	-	-	-	-	-	FHh7Yy2GfD5KjRt4vn	-	text/javascript
+1698710440.000000	CNv2Xc1UXpGfqrMa8	192.168.1.130	49322	10.0.0.19	8080	1	POST	api.example.com	/data	-	1.1	Mozilla/5.0	2048	16384	200	OK	-	-	(empty)	-	-	-	-	-	-	FWw6Xx1BcM4HpQt9sm	-	application/json

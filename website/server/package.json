@@ -1,0 +1,41 @@
+{
+  "name": "network-security-dashboard-server",
+  "version": "1.0.0",
+  "description": "Server for Network Security Monitoring Dashboard",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": [
+    "network",
+    "security",
+    "snort",
+    "zeek",
+    "monitoring"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@headlessui/react": "^2.2.9",
+    "@heroicons/react": "^2.2.0",
+    "autoprefixer": "^10.4.21",
+    "axios": "^1.13.1",
+    "chokidar": "^4.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "framer-motion": "^12.23.24",
+    "morgan": "^1.10.1",
+    "node-cron": "^4.2.1",
+    "postcss": "^8.5.6",
+    "recharts": "^3.3.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "tailwindcss": "^4.1.16"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "packageManager": "pnpm@10.12.1"
+}

@@ -1,0 +1,19 @@
+{
+  "name": "network-security-dashboard",
+  "version": "1.0.0",
+  "description": "Network Security Monitoring Dashboard with Snort and Zeek integration",
+  "scripts": {
+    "client": "cd client && pnpm dev",
+    "server": "cd server && pnpm dev",
+    "dev": "concurrently \"pnpm run server\" \"pnpm run client\"",
+    "install:all": "pnpm install && cd client && pnpm install && cd ../server && pnpm install",
+    "build": "cd client && pnpm build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "packageManager": "pnpm@10.12.1"
+}

@@ -7,6 +7,7 @@ use log::{debug, error, info, warn};
 use pcap_file::{DataLink, pcap::PcapReader, pcap::PcapWriter};
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
@@ -273,6 +274,102 @@ fn calculate_packet_hash(data: &[u8]) -> String {
     hex::encode(&hasher.finalize()[..8]) // Use first 8 bytes only
 }
 
+// fn process_alerts(
+//     eve_path: &PathBuf,
+//     packet_index: &[PacketInfo],
+//     malicious_packets: &mut HashSet<u64>,
+//     malicious_flows: &mut HashSet<Flow>,
+//     filter_log: &mut Vec<FilterLog>,
+//     mode: &str,
+// ) -> Result<()> {
+//     let file = File::open(eve_path).context("Failed to open EVE JSON file")?;
+//     let mut reader = BufReader::new(file);
+
+//     // Try to parse as a JSON array first
+//     let mut content = String::new();
+//     reader.read_to_string(&mut content)?;
+
+//     let alerts: Vec<Alert> = match serde_json::from_str(&content) {
+//         Ok(alerts) => {
+//             info!("Processing EVE JSON in array format");
+//             alerts
+//         }
+//         Err(_) => {
+//             info!("Processing EVE JSON in line-delimited format");
+//             // If array parsing fails, try line-delimited format
+//             content
+//                 .lines()
+//                 .filter(|line| !line.trim().is_empty())
+//                 .filter_map(|line| match serde_json::from_str::<Alert>(line) {
+//                     Ok(alert) => Some(alert),
+//                     Err(e) => {
+//                         error!("Failed to parse line: {}", e);
+//                         error!("Problematic line content: {}", line);
+//                         None
+//                     }
+//                 })
+//                 .collect()
+//         }
+//     };
+
+//     let pb = ProgressBar::new(alerts.len() as u64);
+//     pb.set_style(
+//         ProgressStyle::default_bar()
+//             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} alerts processed ({msg})")
+//             .unwrap()
+//     );
+//     let pb = ProgressBar::new_spinner();
+
+//     for alert in alerts {
+//         pb.inc(1);
+//         if pb.position() % 1000 == 0 {
+//             pb.set_message(format!(
+//                 "Found {} malicious items",
+//                 malicious_packets.len() + malicious_flows.len()
+//             ));
+//         }
+
+//         // Direct packet index mapping
+//         if let Some(pcap_cnt) = alert.pcap_cnt {
+//             malicious_packets.insert(pcap_cnt);
+//             record_alert(filter_log, pcap_cnt, &alert);
+//             continue;
+//         }
+
+//         // Flow-based mapping
+//         if mode == "flow" {
+//             if let (Ok(src_ip), Ok(dst_ip)) = (
+//                 alert.src_ip.get_ip().parse(),
+//                 alert.dest_ip.get_ip().parse(),
+//             ) {
+//                 let flow = Flow {
+//                     src_ip,
+//                     dst_ip,
+//                     src_port: alert.src_port,
+//                     dst_port: alert.dest_port,
+//                     protocol: protocol_str_to_num(&alert.proto),
+//                 };
+//                 malicious_flows.insert(flow);
+//             }
+//             continue;
+//         }
+
+//         // Time-based packet matching
+//         if let Ok(alert_time) = DateTime::parse_from_rfc3339(&alert.timestamp) {
+//             match_packets_by_time(
+//                 packet_index,
+//                 malicious_packets,
+//                 filter_log,
+//                 &alert,
+//                 alert_time.timestamp() as u32,
+//             );
+//         }
+//     }
+
+//     pb.finish();
+//     Ok(())
+// }
+
 fn process_alerts(
     eve_path: &PathBuf,
     packet_index: &[PacketInfo],
@@ -282,53 +379,69 @@ fn process_alerts(
     mode: &str,
 ) -> Result<()> {
     let file = File::open(eve_path).context("Failed to open EVE JSON file")?;
-    let mut reader = BufReader::new(file);
+    let reader = BufReader::new(file);
 
-    // Try to parse as a JSON array first
-    let mut content = String::new();
-    reader.read_to_string(&mut content)?;
+    info!("Processing Suricata EVE JSON (streaming)...");
+    let mut total_lines: usize = 0;
+    let mut alert_lines: usize = 0;
+    let mut non_alert_lines: usize = 0;
+    let mut parse_errors: usize = 0;
 
-    let alerts: Vec<Alert> = match serde_json::from_str(&content) {
-        Ok(alerts) => {
-            info!("Processing EVE JSON in array format");
-            alerts
-        }
-        Err(_) => {
-            info!("Processing EVE JSON in line-delimited format");
-            // If array parsing fails, try line-delimited format
-            content
-                .lines()
-                .filter(|line| !line.trim().is_empty())
-                .filter_map(|line| match serde_json::from_str::<Alert>(line) {
-                    Ok(alert) => Some(alert),
-                    Err(e) => {
-                        error!("Failed to parse line: {}", e);
-                        error!("Problematic line content: {}", line);
-                        None
-                    }
-                })
-                .collect()
-        }
-    };
+    // We'll collect typed Alert entries only for true alert events.
+    // But we process them as we go (no big vector load).
+    for line_res in reader.lines() {
+        total_lines += 1;
+        let line = match line_res {
+            Ok(l) => l,
+            Err(e) => {
+                error!("Failed to read line {}: {}", total_lines, e);
+                continue;
+            }
+        };
 
-    let pb = ProgressBar::new(alerts.len() as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} alerts processed ({msg})")
-            .unwrap()
-    );
-    let pb = ProgressBar::new_spinner();
-
-    for alert in alerts {
-        pb.inc(1);
-        if pb.position() % 1000 == 0 {
-            pb.set_message(format!(
-                "Found {} malicious items",
-                malicious_packets.len() + malicious_flows.len()
-            ));
+        if line.trim().is_empty() {
+            continue;
         }
 
-        // Direct packet index mapping
+        // Fast early filter: check for "event_type":"alert" or the "alert" key.
+        // This avoids trying to deserialize non-alert types.
+        // Prefer JSON-based check for correctness.
+        let v: Value = match serde_json::from_str(&line) {
+            Ok(val) => val,
+            Err(e) => {
+                parse_errors += 1;
+                error!("Failed to parse JSON on line {}: {} -- content: {}", total_lines, e, &line);
+                continue;
+            }
+        };
+
+        // If it's not an alert event, skip.
+        let is_alert = v.get("event_type")
+            .and_then(|et| et.as_str())
+            .map(|s| s.eq_ignore_ascii_case("alert"))
+            .unwrap_or(false)
+            || v.get("alert").is_some();
+
+        if !is_alert {
+            non_alert_lines += 1;
+            debug!("Skipping non-alert event at line {} (type: {:?})", total_lines, v.get("event_type"));
+            continue;
+        }
+
+        // Now we have an alert-like object; deserialize into your Alert struct.
+        let alert: Alert = match serde_json::from_value(v) {
+            Ok(a) => a,
+            Err(e) => {
+                parse_errors += 1;
+                error!("Failed to deserialize Alert at line {}: {} -- content: {}", total_lines, e, &line);
+                continue;
+            }
+        };
+
+        alert_lines += 1;
+
+        // The rest of your existing logic for each alert:
+        // direct mapping by pcap_cnt
         if let Some(pcap_cnt) = alert.pcap_cnt {
             malicious_packets.insert(pcap_cnt);
             record_alert(filter_log, pcap_cnt, &alert);
@@ -353,7 +466,7 @@ fn process_alerts(
             continue;
         }
 
-        // Time-based packet matching
+        // Time-based packet matching (fallback)
         if let Ok(alert_time) = DateTime::parse_from_rfc3339(&alert.timestamp) {
             match_packets_by_time(
                 packet_index,
@@ -362,12 +475,18 @@ fn process_alerts(
                 &alert,
                 alert_time.timestamp() as u32,
             );
+        } else {
+            // If timestamp parsing fails, you can optionally try other heuristics
+            warn!("Could not parse timestamp '{}' for alert (pcap_cnt: {:?})", alert.timestamp, alert.pcap_cnt);
         }
     }
 
-    pb.finish();
+    info!("EVE processing finished: total lines = {}, alerts = {}, skipped non-alert lines = {}, parse_errors = {}",
+          total_lines, alert_lines, non_alert_lines, parse_errors);
+
     Ok(())
 }
+
 
 fn protocol_str_to_num(proto: &str) -> u8 {
     match proto.to_uppercase().as_str() {

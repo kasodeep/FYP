@@ -20,3 +20,9 @@ log = "0.4"
 env_logger = "0.10"
 thiserror = "1.0"
 indicatif = "0.17"
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.11", features = ["json", "multipart"] }
+pcap = "1.0"
+crossbeam-channel = "0.5"
+uuid = { version = "1.0", features = ["v4"] }
+tempfile = "3.0"

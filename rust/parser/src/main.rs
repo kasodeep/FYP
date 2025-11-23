@@ -279,7 +279,7 @@ impl NetworkPipeline {
             let file_path = work_dir.join(pattern);
             if file_path.exists() {
                 let _ = std::fs::remove_file(&file_path);
-                debug!("🗑️ Cleaned up old file: {:?}", file_path);
+                debug!("Cleaned up old file: {:?}", file_path);
             }
         }
 
@@ -293,7 +293,7 @@ impl NetworkPipeline {
             let dir_path = work_dir.join(pattern);
             if dir_path.exists() {
                 let _ = std::fs::remove_dir_all(&dir_path);
-                debug!("🗑️ Cleaned up old directory: {:?}", dir_path);
+                debug!("Cleaned up old directory: {:?}", dir_path);
             }
         }
     }
@@ -322,27 +322,27 @@ impl NetworkPipeline {
         info!("Starting pipeline components...");
 
         // Spawn all pipeline components with individual logging
-        info!("🚀 Starting packet capture component...");
+        info!("Starting packet capture component...");
         let _capture_handle = self.spawn_packet_capture().await?;
 
-        info!("🚀 Starting Suricata monitor component...");
+        info!("Starting Suricata monitor component...");
         let _suricata_handle = self.spawn_suricata_monitor().await?;
 
-        info!("🚀 Starting PCAP filter component...");
+        info!("Starting PCAP filter component...");
         let _filter_handle = self.spawn_pcap_filter().await?;
 
-        info!("🚀 Starting Zeek processor component...");
+        info!("Starting Zeek processor component...");
         let _zeek_handle = self.spawn_zeek_processor().await?;
 
-        info!("🚀 Starting ML client component...");
+        info!("Starting ML client component...");
         let _ml_handle = self.spawn_ml_client().await?;
 
-        info!("✅ All pipeline components started successfully!");
+        info!("All pipeline components started successfully!");
 
         // Keep the main thread alive - components communicate directly
         loop {
             tokio::time::sleep(Duration::from_secs(30)).await;
-            info!("🔄 Pipeline running...");
+            info!("Pipeline running...");
         }
     }
 
@@ -359,7 +359,7 @@ impl NetworkPipeline {
                         if let Err(e) =
                             suricata_tx.send(PipelineMessage::NewPcapFile(pcap_path.clone()))
                         {
-                            error!("❌ Failed to send to Suricata: {}", e);
+                            error!("Failed to send to Suricata: {}", e);
                             break;
                         }
                     }
@@ -388,7 +388,7 @@ impl NetworkPipeline {
         let pcap_file = work_dir.join(format!("capture_{}.pcap", file_id));
 
         info!(
-            "📦 Capturing traffic (ID: {}) on {} for {}s...",
+            "Capturing traffic (ID: {}) on {} for {}s...",
             file_id,
             interface,
             duration.as_secs()
@@ -439,7 +439,7 @@ impl NetworkPipeline {
 
         let capture_duration = start_time.elapsed();
         info!(
-            "✅ Captured {} in {:.1}s",
+            "Captured {} in {:.1}s",
             pcap_file.file_name().unwrap().to_str().unwrap(),
             capture_duration.as_secs_f32()
         );
@@ -453,7 +453,7 @@ impl NetworkPipeline {
         let config = self.config.clone();
 
         let handle = tokio::spawn(async move {
-            info!("🔍 Suricata monitor started");
+            info!("Suricata monitor started");
 
             loop {
                 match suricata_rx.recv_timeout(std::time::Duration::from_secs(10)) {
@@ -469,7 +469,7 @@ impl NetworkPipeline {
                             Ok(eve_json_path) => {
                                 let duration = start_time.elapsed();
                                 info!(
-                                    "✅ Suricata analysis completed in {:.1}s: {}",
+                                    "Suricata analysis completed in {:.1}s: {}",
                                     duration.as_secs_f32(),
                                     pcap_path.file_name().unwrap().to_str().unwrap()
                                 );
@@ -483,7 +483,7 @@ impl NetworkPipeline {
                             Err(e) => {
                                 let duration = start_time.elapsed();
                                 error!(
-                                    "❌ Suricata failed in {:.1}s for {}: {}",
+                                    "Suricata failed in {:.1}s for {}: {}",
                                     duration.as_secs_f32(),
                                     pcap_path.file_name().unwrap().to_str().unwrap(),
                                     e
@@ -492,7 +492,7 @@ impl NetworkPipeline {
                         }
                     }
                     Ok(PipelineMessage::Shutdown) => {
-                        info!("🛑 Suricata monitor shutting down");
+                        info!("Suricata monitor shutting down");
                         break;
                     }
                     Ok(_) => {
@@ -568,7 +568,7 @@ impl NetworkPipeline {
         let work_dir = self.config.work_dir.clone();
 
         let handle = tokio::spawn(async move {
-            info!("🧹 PCAP filter started");
+            info!("PCAP filter started");
 
             loop {
                 match filter_rx.recv() {
@@ -579,7 +579,7 @@ impl NetworkPipeline {
                             Ok(clean_path) => {
                                 let duration = start_time.elapsed();
                                 info!(
-                                    "✅ Filtered in {:.1}s: {}",
+                                    "Filtered in {:.1}s: {}",
                                     duration.as_secs_f32(),
                                     clean_path.file_name().unwrap().to_str().unwrap()
                                 );
@@ -592,12 +592,12 @@ impl NetworkPipeline {
                             }
                             Err(e) => {
                                 let duration = start_time.elapsed();
-                                error!("❌ Filter failed in {:.1}s: {}", duration.as_secs_f32(), e);
+                                error!("Filter failed in {:.1}s: {}", duration.as_secs_f32(), e);
                             }
                         }
                     }
                     Ok(PipelineMessage::Shutdown) => {
-                        info!("🛑 PCAP filter shutting down");
+                        info!("PCAP filter shutting down");
                         break;
                     }
                     Ok(_) => {
@@ -632,7 +632,7 @@ impl NetworkPipeline {
         let file_size = std::fs::metadata(pcap_path)?.len();
 
         if file_size == 0 {
-            warn!("⚠️ Input PCAP file is empty, creating empty clean PCAP");
+            warn!("Input PCAP file is empty, creating empty clean PCAP");
             // Create an empty but valid PCAP file
             let empty_file = File::create(&clean_path)?;
             let mut empty_writer = PcapWriter::new(empty_file)?;
@@ -650,7 +650,7 @@ impl NetworkPipeline {
         index_pcap(pcap_path, &mut packet_index)?;
 
         if packet_index.is_empty() {
-            warn!("⚠️ No packets found in PCAP file, creating empty clean PCAP");
+            warn!("No packets found in PCAP file, creating empty clean PCAP");
             // Create an empty but valid PCAP file
             let empty_file = File::create(&clean_path)?;
             let mut empty_writer = PcapWriter::new(empty_file)?;
@@ -703,7 +703,7 @@ impl NetworkPipeline {
         let zeek_path = self.config.zeek_path.clone();
 
         let handle = tokio::spawn(async move {
-            info!("🔍 Zeek processor started");
+            info!("Zeek processor started");
 
             loop {
                 match zeek_rx.recv() {
@@ -716,7 +716,7 @@ impl NetworkPipeline {
                             Ok(conn_log_path) => {
                                 let duration = start_time.elapsed();
                                 info!(
-                                    "✅ Zeek analysis completed in {:.1}s: {}",
+                                    "Zeek analysis completed in {:.1}s: {}",
                                     duration.as_secs_f32(),
                                     clean_pcap_path.file_name().unwrap().to_str().unwrap()
                                 );
@@ -729,12 +729,12 @@ impl NetworkPipeline {
                             }
                             Err(e) => {
                                 let duration = start_time.elapsed();
-                                error!("❌ Zeek failed in {:.1}s: {}", duration.as_secs_f32(), e);
+                                error!("Zeek failed in {:.1}s: {}", duration.as_secs_f32(), e);
                             }
                         }
                     }
                     Ok(PipelineMessage::Shutdown) => {
-                        info!("🛑 Zeek processor shutting down");
+                        info!("Zeek processor shutting down");
                         break;
                     }
                     Ok(_) => {
@@ -774,7 +774,7 @@ impl NetworkPipeline {
 
         if file_size <= 24 {
             // PCAP header is 24 bytes, so if smaller/equal, it's empty
-            warn!("⚠️ PCAP file is empty or too small for Zeek processing");
+            warn!("PCAP file is empty or too small for Zeek processing");
             // Create an empty conn.log file
             let conn_log_path = zeek_output_dir.join("conn.log");
             std::fs::write(
@@ -825,7 +825,7 @@ impl NetworkPipeline {
 
         let conn_log_path = zeek_output_dir.join("conn.log");
         if !conn_log_path.exists() {
-            warn!("⚠️ Zeek didn't generate conn.log (no connections found), creating empty log");
+            warn!("Zeek didn't generate conn.log (no connections found), creating empty log");
             // Create an empty conn.log with proper headers
             std::fs::write(
                 &conn_log_path,
@@ -840,9 +840,9 @@ impl NetworkPipeline {
                 .count();
 
             if data_lines == 0 {
-                warn!("⚠️ Zeek generated conn.log but it contains no connection data");
+                warn!("Zeek generated conn.log but it contains no connection data");
                 info!(
-                    "📄 conn.log headers only - this indicates no TCP/UDP connections were established"
+                    "conn.log headers only - this indicates no TCP/UDP connections were established"
                 );
             } // Connection count reporting handled by caller
         }
@@ -855,7 +855,7 @@ impl NetworkPipeline {
         let ml_api = self.config.ml_api.clone();
 
         let handle = tokio::spawn(async move {
-            info!("🤖 ML client started");
+            info!("ML client started");
             let client = reqwest::Client::new();
 
             loop {
@@ -866,17 +866,17 @@ impl NetworkPipeline {
                         match NetworkPipeline::call_ml_api(&client, &conn_log_path, &ml_api).await {
                             Ok(response) => {
                                 let duration = start_time.elapsed();
-                                info!("✅ ML analysis completed in {:.1}s", duration.as_secs_f32());
+                                info!("ML analysis completed in {:.1}s", duration.as_secs_f32());
                                 NetworkPipeline::process_ml_response(&response);
                             }
                             Err(e) => {
                                 let duration = start_time.elapsed();
-                                error!("❌ ML failed in {:.1}s: {}", duration.as_secs_f32(), e);
+                                error!("ML failed in {:.1}s: {}", duration.as_secs_f32(), e);
                             }
                         }
                     }
                     Ok(PipelineMessage::Shutdown) => {
-                        info!("🛑 ML client shutting down");
+                        info!("ML client shutting down");
                         break;
                     }
                     Ok(_) => {
@@ -906,7 +906,7 @@ impl NetworkPipeline {
             .collect();
 
         if data_lines.is_empty() {
-            info!("📭 conn.log is empty (no connections), skipping ML analysis");
+            info!("conn.log is empty (no connections), skipping ML analysis");
             return Ok(MLResponse {
                 status: "success".to_string(),
                 summary: Some(MLSummary {
@@ -1083,7 +1083,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        info!("🧹 Cleaned up old pipeline files from previous runs");
+        info!("Cleaned up old pipeline files from previous runs");
     }
 
     // Create work directory if it doesn't exist
@@ -1092,7 +1092,7 @@ async fn main() -> Result<()> {
     // Initialize file counter (start fresh)
     let counter_file = config.work_dir.join(".file_counter");
     std::fs::write(&counter_file, "0")?;
-    info!("🔄 Initialized circular file naming system (1-100)");
+    info!("Initialized circular file naming system (1-100)");
 
     // Start the real-time pipeline
     let pipeline = NetworkPipeline::new(config)?;
@@ -1401,12 +1401,10 @@ fn split_pcap(
         packet_number += 1;
     }
 
-    if quarantine_count > 0 {
-        info!(
-            "Split: {} clean, {} quarantined packets",
-            clean_count, quarantine_count
-        );
-    }
+    info!(
+        "Packet filtering complete: {} clean packets, {} quarantined packets",
+        clean_count, quarantine_count
+    );
 
     Ok(())
 }

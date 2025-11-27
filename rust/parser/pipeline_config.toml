@@ -1,0 +1,43 @@
+# Real-time Network Analysis Pipeline Configuration
+
+[capture]
+# Network interface to monitor (use "any" for all interfaces on Linux)
+interface = "Wi-Fi"
+# Capture duration in seconds for each PCAP file
+duration = 5
+# Maximum number of concurrent capture files to process
+max_concurrent = 3
+
+[suricata]
+# Path to Suricata configuration file (optional)
+# config_file = "/etc/suricata/suricata.yaml"
+# Custom rules directory (optional)
+# rules_dir = "/var/lib/suricata/rules"
+
+[zeek]
+# Path to Zeek executable
+executable = "zeek"
+# Additional Zeek scripts to load (optional)
+# scripts = ["/path/to/custom/script.zeek"]
+
+[ml_api]
+# ML model API endpoint
+url = "http://localhost:5000/api/predict"
+# Request timeout in seconds
+timeout = 30
+# Retry attempts on failure
+max_retries = 3
+
+[pipeline]
+# Working directory for temporary files
+work_dir = "./pipeline_data"
+# Maximum age of temporary files in hours (cleanup threshold)
+max_file_age_hours = 24
+# Enable debug logging
+debug = false
+
+[monitoring]
+# Enable pipeline performance monitoring
+enabled = true
+# Metrics collection interval in seconds
+interval = 60

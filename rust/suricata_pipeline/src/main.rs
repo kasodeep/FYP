@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 use clap::Parser;
 use crossbeam_channel::{Receiver, Sender, bounded};
 use etherparse::{InternetSlice, TransportSlice};
@@ -82,7 +82,7 @@ struct PipelineConfig {
     debug: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum IpAddress {
     String(String),
@@ -98,7 +98,7 @@ impl IpAddress {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 struct Alert {
     #[serde(default)]
@@ -107,14 +107,12 @@ struct Alert {
     flow_id: Option<u64>,
     #[serde(default)]
     pcap_cnt: Option<u64>,
-    #[serde(alias = "src_ip")]
-    #[serde(alias = "source")]
-    src_ip: IpAddress,
+    #[serde(default, alias = "src_ip", alias = "source")]
+    src_ip: Option<IpAddress>,
     #[serde(default)]
     src_port: u16,
-    #[serde(alias = "dest_ip")]
-    #[serde(alias = "destination")]
-    dest_ip: IpAddress,
+    #[serde(default, alias = "dest_ip", alias = "destination")]
+    dest_ip: Option<IpAddress>,
     #[serde(default)]
     dest_port: u16,
     #[serde(alias = "proto")]
@@ -128,7 +126,7 @@ fn default_proto() -> String {
     "UNKNOWN".to_string()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct AlertDetails {
     #[serde(default)]
     signature_id: u32,
@@ -178,47 +176,82 @@ struct PacketInfo {
 // Pipeline message types for inter-thread communication
 #[derive(Debug, Clone)]
 enum PipelineMessage {
-    NewPcapFile(PathBuf),
-    EveJsonReady(PathBuf, PathBuf), // (eve_json_path, original_pcap_path)
-    CleanPcapReady(PathBuf),        // clean_pcap_path
-    ConnLogReady(PathBuf),          // conn_log_path
+    PcapReady(PathBuf, i64, i64), // (pcap_path, window_start_ts, window_end_ts)
+    CleanPcapReady(PathBuf),      // clean_pcap_path
+    ConnLogReady(PathBuf),        // conn_log_path
     MLResult(MLResponse),
     Shutdown,
 }
 
+#[derive(Debug, Clone)]
+struct StoredAlert {
+    alert: Alert,
+    epoch_ts: Option<i64>,
+    ingested_epoch_ts: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MLResponse {
+    #[serde(default = "default_status")]
     status: String,
+    #[serde(default)]
     summary: Option<MLSummary>,
+    #[serde(default)]
     processing_time_ms: Option<f64>,
+    #[serde(default, alias = "predictions")]
     results: Vec<ThreatResult>,
+    #[serde(default)]
     timestamp: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MLSummary {
+    #[serde(alias = "total")]
     total_connections: u32,
+    #[serde(alias = "malicious")]
     malicious_count: u32,
+    #[serde(alias = "benign")]
     benign_count: u32,
+    #[serde(default)]
     avg_confidence: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ThreatResult {
+    #[serde(default)]
     id: u32,
+    #[serde(default)]
     src_ip: String,
+    #[serde(default)]
     src_port: Option<u16>,
+    #[serde(default)]
     dst_ip: String,
+    #[serde(default)]
     dst_port: Option<u16>,
+    #[serde(default, alias = "proto")]
     protocol: String,
-    prediction: Prediction,
+    #[serde(default)]
+    prediction: Option<Prediction>,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    confidence: Option<f64>,
+    #[serde(default)]
+    is_malicious: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Prediction {
+    #[serde(default, alias = "label")]
     class: String,
+    #[serde(default)]
     confidence: f64,
+    #[serde(default)]
     is_malicious: bool,
+}
+
+fn default_status() -> String {
+    "ok".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,9 +265,6 @@ struct ThreatSummary {
 // Main pipeline orchestrator with separate channels
 struct NetworkPipeline {
     config: PipelineConfig,
-    // Separate channels for each component
-    suricata_tx: Sender<PipelineMessage>,
-    suricata_rx: Receiver<PipelineMessage>,
     filter_tx: Sender<PipelineMessage>,
     filter_rx: Receiver<PipelineMessage>,
     zeek_tx: Sender<PipelineMessage>,
@@ -242,6 +272,7 @@ struct NetworkPipeline {
     ml_tx: Sender<PipelineMessage>,
     ml_rx: Receiver<PipelineMessage>,
     running_processes: Arc<Mutex<HashMap<String, Child>>>,
+    alert_store: Arc<Mutex<Vec<StoredAlert>>>,
 }
 
 impl NetworkPipeline {
@@ -299,15 +330,12 @@ impl NetworkPipeline {
     }
 
     fn new(config: PipelineConfig) -> Result<Self> {
-        let (suricata_tx, suricata_rx) = bounded(100);
         let (filter_tx, filter_rx) = bounded(100);
         let (zeek_tx, zeek_rx) = bounded(100);
         let (ml_tx, ml_rx) = bounded(100);
 
         Ok(NetworkPipeline {
             config,
-            suricata_tx,
-            suricata_rx,
             filter_tx,
             filter_rx,
             zeek_tx,
@@ -315,18 +343,21 @@ impl NetworkPipeline {
             ml_tx,
             ml_rx,
             running_processes: Arc::new(Mutex::new(HashMap::new())),
+            alert_store: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
     async fn run(&self) -> Result<()> {
         info!("Starting pipeline components...");
 
-        // Spawn all pipeline components with individual logging
+        info!("Starting persistent Suricata daemon...");
+        let _suricata_daemon_handle = self.spawn_suricata_daemon().await?;
+
+        info!("Starting Suricata alert reader...");
+        let _alert_reader_handle = self.spawn_alert_reader().await?;
+
         info!("Starting packet capture component...");
         let _capture_handle = self.spawn_packet_capture().await?;
-
-        info!("Starting Suricata monitor component...");
-        let _suricata_handle = self.spawn_suricata_monitor().await?;
 
         info!("Starting PCAP filter component...");
         let _filter_handle = self.spawn_pcap_filter().await?;
@@ -350,16 +381,16 @@ impl NetworkPipeline {
         let interface = self.config.interface.clone();
         let work_dir = self.config.work_dir.clone();
         let duration = self.config.capture_duration;
-        let suricata_tx = self.suricata_tx.clone();
+        let filter_tx = self.filter_tx.clone();
 
         let handle = tokio::spawn(async move {
             loop {
                 match NetworkPipeline::capture_traffic(&interface, &work_dir, duration).await {
-                    Ok(pcap_path) => {
+                    Ok((pcap_path, start_ts, end_ts)) => {
                         if let Err(e) =
-                            suricata_tx.send(PipelineMessage::NewPcapFile(pcap_path.clone()))
+                            filter_tx.send(PipelineMessage::PcapReady(pcap_path, start_ts, end_ts))
                         {
-                            error!("Failed to send to Suricata: {}", e);
+                            error!("Failed to send PCAP to filter: {}", e);
                             break;
                         }
                     }
@@ -378,7 +409,7 @@ impl NetworkPipeline {
         interface: &str,
         work_dir: &Path,
         duration: Duration,
-    ) -> Result<PathBuf> {
+    ) -> Result<(PathBuf, i64, i64)> {
         let start_time = std::time::Instant::now();
         let file_id = Self::get_next_file_id(work_dir);
 
@@ -444,138 +475,236 @@ impl NetworkPipeline {
             capture_duration.as_secs_f32()
         );
 
-        Ok(pcap_file)
+        let end_ts = Utc::now().timestamp();
+        let start_ts = end_ts - duration.as_secs() as i64;
+
+        Ok((pcap_file, start_ts, end_ts))
     }
 
-    async fn spawn_suricata_monitor(&self) -> Result<tokio::task::JoinHandle<()>> {
-        let suricata_rx = self.suricata_rx.clone();
-        let filter_tx = self.filter_tx.clone();
-        let config = self.config.clone();
+    async fn spawn_suricata_daemon(&self) -> Result<tokio::task::JoinHandle<()>> {
+        let interface = self.config.interface.clone();
+        let config_path = self
+            .config
+            .suricata_config
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "/etc/suricata/suricata.yaml".to_string());
+        let live_dir = self.config.work_dir.join("suricata_live");
 
+        std::fs::create_dir_all(&live_dir)?;
+
+        info!(
+            "Launching Suricata daemon with config={} interface={} log_dir={}",
+            config_path,
+            interface,
+            live_dir.display()
+        );
+
+        let mut cmd = Command::new("suricata");
+        cmd.arg("-c")
+            .arg(config_path)
+            .arg("-i")
+            .arg(interface)
+            .arg("-l")
+            .arg(&live_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let child = cmd.spawn().context("Failed to start persistent Suricata")?;
+
+        {
+            let mut processes = self.running_processes.lock().unwrap();
+            processes.insert("suricata_daemon".to_string(), child);
+        }
+
+        let running_processes = self.running_processes.clone();
         let handle = tokio::spawn(async move {
-            info!("Suricata monitor started");
-
             loop {
-                match suricata_rx.recv_timeout(std::time::Duration::from_secs(10)) {
-                    Ok(PipelineMessage::NewPcapFile(pcap_path)) => {
-                        let start_time = std::time::Instant::now();
+                let exited_child = {
+                    let mut processes = running_processes.lock().unwrap();
+                    let child = match processes.get_mut("suricata_daemon") {
+                        Some(c) => c,
+                        None => break,
+                    };
 
-                        match NetworkPipeline::run_suricata(
-                            &pcap_path,
-                            config.suricata_config.as_ref(),
-                        )
-                        .await
-                        {
-                            Ok(eve_json_path) => {
-                                let duration = start_time.elapsed();
-                                info!(
-                                    "Suricata analysis completed in {:.1}s: {}",
-                                    duration.as_secs_f32(),
-                                    pcap_path.file_name().unwrap().to_str().unwrap()
-                                );
+                    let exited = match child.try_wait() {
+                        Ok(Some(_)) => true,
+                        Ok(None) => false,
+                        Err(e) => {
+                            error!("Failed checking Suricata daemon status: {}", e);
+                            false
+                        }
+                    };
 
-                                if let Err(e) = filter_tx
-                                    .send(PipelineMessage::EveJsonReady(eve_json_path, pcap_path))
-                                {
-                                    error!("Failed to send to filter: {}", e);
-                                }
+                    if exited {
+                        processes.remove("suricata_daemon")
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(child) = exited_child {
+                    match child.wait_with_output() {
+                        Ok(output) => {
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+
+                            error!(
+                                "Suricata daemon exited unexpectedly: {:?}",
+                                output.status.code()
+                            );
+                            if !stdout.trim().is_empty() {
+                                error!("Suricata daemon stdout:\n{}", stdout);
                             }
-                            Err(e) => {
-                                let duration = start_time.elapsed();
-                                error!(
-                                    "Suricata failed in {:.1}s for {}: {}",
-                                    duration.as_secs_f32(),
-                                    pcap_path.file_name().unwrap().to_str().unwrap(),
-                                    e
-                                );
+                            if !stderr.trim().is_empty() {
+                                error!("Suricata daemon stderr:\n{}", stderr);
                             }
                         }
+                        Err(e) => {
+                            error!("Suricata daemon exited and output could not be read: {}", e);
+                        }
                     }
-                    Ok(PipelineMessage::Shutdown) => {
-                        info!("Suricata monitor shutting down");
-                        break;
-                    }
-                    Ok(_) => {
-                        // Ignore other message types
-                    }
-                    Err(_timeout) => {
-                        // Timeout - continue waiting
-                    }
+                    break;
                 }
+
+                sleep(Duration::from_secs(1)).await;
             }
         });
 
         Ok(handle)
     }
 
-    async fn run_suricata(pcap_path: &Path, config: Option<&PathBuf>) -> Result<PathBuf> {
-        let config_path = config
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "/etc/suricata/suricata.yaml".to_string());
+    async fn spawn_alert_reader(&self) -> Result<tokio::task::JoinHandle<()>> {
+        let alert_store = self.alert_store.clone();
+        let alert_file_path = self.config.work_dir.join("suricata_live").join("eve.json");
 
-        let output_dir = pcap_path
-            .parent()
-            .context("Failed to get PCAP directory")?
-            .join(format!(
-                "suricata_{}",
-                pcap_path
-                    .file_stem()
-                    .context("Failed to get PCAP filename")?
-                    .to_string_lossy()
-            ));
+        let handle = tokio::spawn(async move {
+            info!("Suricata alert reader started");
+            let mut offset: u64 = 0;
 
-        std::fs::create_dir_all(&output_dir)
-            .context("Failed to create Suricata output directory")?;
+            loop {
+                if !alert_file_path.exists() {
+                    sleep(Duration::from_millis(250)).await;
+                    continue;
+                }
 
-        // Suricata analysis starting (timing handled by caller)
+                let file = match File::open(&alert_file_path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        error!("Failed to open Suricata eve.json stream file: {}", e);
+                        sleep(Duration::from_millis(500)).await;
+                        continue;
+                    }
+                };
 
-        let output = Command::new("suricata")
-            .arg("-c")
-            .arg(&config_path)
-            .arg("-r")
-            .arg(pcap_path)
-            .arg("-l")
-            .arg(&output_dir)
-            .arg("-v") // Add verbose flag
-            .output()
-            .context("Failed to execute Suricata")?;
+                let metadata_len = match file.metadata() {
+                    Ok(m) => m.len(),
+                    Err(_) => 0,
+                };
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout: std::borrow::Cow<'_, str> = String::from_utf8_lossy(&output.stdout);
-            error!("Suricata stderr: {}", stderr);
-            error!("Suricata stdout: {}", stdout);
-            return Err(anyhow::anyhow!(
-                "Suricata failed with exit code: {:?}",
-                output.status.code()
-            ));
-        }
+                if metadata_len < offset {
+                    offset = 0;
+                }
 
-        let eve_json_path = output_dir.join("eve.json");
-        if !eve_json_path.exists() {
-            return Err(anyhow::anyhow!(
-                "Suricata did not create eve.json at {:?}",
-                eve_json_path
-            ));
-        }
+                let mut reader = BufReader::new(file);
+                if reader.seek_relative(offset as i64).is_err() {
+                    offset = 0;
+                    sleep(Duration::from_millis(250)).await;
+                    continue;
+                }
 
-        Ok(eve_json_path)
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    let bytes = match reader.read_line(&mut line) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            error!("Failed reading Suricata eve.json stream: {}", e);
+                            break;
+                        }
+                    };
+
+                    if bytes == 0 {
+                        break;
+                    }
+
+                    offset += bytes as u64;
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+
+                    let v: Value = match serde_json::from_str(trimmed) {
+                        Ok(val) => val,
+                        Err(e) => {
+                            debug!("Failed to parse Suricata JSON stream line: {}", e);
+                            continue;
+                        }
+                    };
+
+                    let is_alert = v
+                        .get("event_type")
+                        .and_then(|et| et.as_str())
+                        .map(|s| s.eq_ignore_ascii_case("alert"))
+                        .unwrap_or(false)
+                        || v.get("alert").is_some();
+
+                    if !is_alert {
+                        continue;
+                    }
+
+                    match serde_json::from_value::<Alert>(v) {
+                        Ok(alert) => {
+                            let epoch_ts = parse_suricata_timestamp_epoch(&alert.timestamp);
+                            let ingested_epoch_ts = Utc::now().timestamp();
+                            let mut store = alert_store.lock().unwrap();
+                            store.push(StoredAlert {
+                                alert,
+                                epoch_ts,
+                                ingested_epoch_ts,
+                            });
+
+                            if store.len() > 50_000 {
+                                let drop_count = store.len() - 50_000;
+                                store.drain(0..drop_count);
+                            }
+                        }
+                        Err(e) => {
+                            debug!("Failed to deserialize Suricata alert stream line: {}", e);
+                        }
+                    }
+                }
+
+                sleep(Duration::from_millis(250)).await;
+            }
+        });
+
+        Ok(handle)
     }
 
     async fn spawn_pcap_filter(&self) -> Result<tokio::task::JoinHandle<()>> {
         let filter_rx = self.filter_rx.clone();
         let zeek_tx = self.zeek_tx.clone();
         let work_dir = self.config.work_dir.clone();
+        let alert_store = self.alert_store.clone();
 
         let handle = tokio::spawn(async move {
             info!("PCAP filter started");
 
             loop {
                 match filter_rx.recv() {
-                    Ok(PipelineMessage::EveJsonReady(eve_path, pcap_path)) => {
+                    Ok(PipelineMessage::PcapReady(pcap_path, window_start_ts, window_end_ts)) => {
                         let start_time = std::time::Instant::now();
 
-                        match NetworkPipeline::filter_pcap(&eve_path, &pcap_path, &work_dir).await {
+                        match NetworkPipeline::filter_pcap(
+                            &pcap_path,
+                            &work_dir,
+                            &alert_store,
+                            window_start_ts,
+                            window_end_ts,
+                        )
+                        .await
+                        {
                             Ok(clean_path) => {
                                 let duration = start_time.elapsed();
                                 info!(
@@ -614,7 +743,13 @@ impl NetworkPipeline {
         Ok(handle)
     }
 
-    async fn filter_pcap(eve_path: &Path, pcap_path: &Path, work_dir: &Path) -> Result<PathBuf> {
+    async fn filter_pcap(
+        pcap_path: &Path,
+        work_dir: &Path,
+        alert_store: &Arc<Mutex<Vec<StoredAlert>>>,
+        window_start_ts: i64,
+        window_end_ts: i64,
+    ) -> Result<PathBuf> {
         // Extract file ID from the input PCAP filename
         let file_stem = pcap_path.file_stem().unwrap().to_str().unwrap();
 
@@ -658,9 +793,55 @@ impl NetworkPipeline {
             return Ok(clean_path);
         }
 
-        // Process alerts
-        process_alerts(
-            eve_path,
+        let (window_alerts, parsed_ts_matches, ingested_ts_matches, total_cached_alerts) = {
+            let alerts = alert_store.lock().unwrap();
+            let total_cached_alerts = alerts.len();
+            let mut parsed_ts_matches = 0usize;
+            let mut ingested_ts_matches = 0usize;
+            let window_alerts = alerts
+                .iter()
+                .filter(|a| {
+                    let parsed_match = a
+                        .epoch_ts
+                        .map(|ts| ts >= window_start_ts - 1 && ts <= window_end_ts + 1)
+                        .unwrap_or(false);
+
+                    if parsed_match {
+                        parsed_ts_matches += 1;
+                        return true;
+                    }
+
+                    let ingested_match = a.ingested_epoch_ts >= window_start_ts - 1
+                        && a.ingested_epoch_ts <= window_end_ts + 1;
+                    if ingested_match {
+                        ingested_ts_matches += 1;
+                    }
+                    ingested_match
+                })
+                .map(|a| a.alert.clone())
+                .collect::<Vec<_>>();
+
+            (
+                window_alerts,
+                parsed_ts_matches,
+                ingested_ts_matches,
+                total_cached_alerts,
+            )
+        };
+
+        info!(
+            "Selected {} alerts for window [{}..{}] from {} cached (parsed_ts_matches={}, ingested_ts_matches={})",
+            window_alerts.len(),
+            window_start_ts,
+            window_end_ts,
+            total_cached_alerts,
+            parsed_ts_matches,
+            ingested_ts_matches
+        );
+
+        // Process alerts collected during this capture window
+        process_suricata_alerts(
+            &window_alerts,
             &packet_index,
             &mut malicious_packets,
             &mut malicious_flows,
@@ -975,18 +1156,28 @@ impl NetworkPipeline {
         let high_confidence_threats: Vec<ThreatSummary> = response
             .results
             .iter()
-            .filter(|result| result.prediction.confidence > 0.95 && result.prediction.is_malicious)
-            .map(|result| ThreatSummary {
-                connection: format!(
-                    "{}:{} → {}:{}",
-                    result.src_ip,
-                    result.src_port.map_or("-".to_string(), |p| p.to_string()),
-                    result.dst_ip,
-                    result.dst_port.map_or("-".to_string(), |p| p.to_string())
-                ),
-                protocol: result.protocol.clone(),
-                threat: result.prediction.class.clone(),
-                confidence: (result.prediction.confidence * 100.0).round() as u32,
+            .filter_map(|result| {
+                let (threat_class, confidence, is_malicious) = Self::prediction_values(result);
+                if confidence > 0.95 && is_malicious {
+                    Some(ThreatSummary {
+                        connection: format!(
+                            "{}:{} → {}:{}",
+                            result.src_ip,
+                            result.src_port.map_or("-".to_string(), |p| p.to_string()),
+                            result.dst_ip,
+                            result.dst_port.map_or("-".to_string(), |p| p.to_string())
+                        ),
+                        protocol: if result.protocol.is_empty() {
+                            "unknown".to_string()
+                        } else {
+                            result.protocol.clone()
+                        },
+                        threat: threat_class,
+                        confidence: (confidence * 100.0).round() as u32,
+                    })
+                } else {
+                    None
+                }
             })
             .collect();
 
@@ -1006,7 +1197,10 @@ impl NetworkPipeline {
         let malicious_connections: Vec<_> = response
             .results
             .iter()
-            .filter(|result| result.prediction.is_malicious)
+            .filter(|result| {
+                let (_, _, is_malicious) = Self::prediction_values(result);
+                is_malicious
+            })
             .collect();
 
         if !malicious_connections.is_empty() {
@@ -1016,21 +1210,46 @@ impl NetworkPipeline {
             );
             for result in malicious_connections.iter().take(5) {
                 // Show first 5
+                let (threat_class, confidence, _) = Self::prediction_values(result);
                 info!(
                     "  {}:{} → {}:{} [{}] - {} ({:.1}% confidence)",
                     result.src_ip,
                     result.src_port.map_or("-".to_string(), |p| p.to_string()),
                     result.dst_ip,
                     result.dst_port.map_or("-".to_string(), |p| p.to_string()),
-                    result.protocol,
-                    result.prediction.class,
-                    result.prediction.confidence * 100.0
+                    if result.protocol.is_empty() {
+                        "unknown"
+                    } else {
+                        &result.protocol
+                    },
+                    threat_class,
+                    confidence * 100.0
                 );
             }
             if malicious_connections.len() > 5 {
                 info!("  ... and {} more", malicious_connections.len() - 5);
             }
         }
+    }
+
+    fn prediction_values(result: &ThreatResult) -> (String, f64, bool) {
+        if let Some(prediction) = &result.prediction {
+            let class = if prediction.class.is_empty() {
+                "Unknown".to_string()
+            } else {
+                prediction.class.clone()
+            };
+            return (class, prediction.confidence, prediction.is_malicious);
+        }
+
+        (
+            result
+                .label
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string()),
+            result.confidence.unwrap_or(0.0),
+            result.is_malicious.unwrap_or(false),
+        )
     }
 
     async fn cleanup_processes(&self) -> Result<()> {
@@ -1170,135 +1389,54 @@ fn calculate_packet_hash(data: &[u8]) -> String {
     hex::encode(&hasher.finalize()[..8]) // Use first 8 bytes only
 }
 
-fn process_alerts(
-    eve_path: &Path,
+fn process_suricata_alerts(
+    alerts: &[Alert],
     packet_index: &[PacketInfo],
     malicious_packets: &mut HashSet<u64>,
     malicious_flows: &mut HashSet<Flow>,
     filter_log: &mut Vec<FilterLog>,
     mode: &str,
 ) -> Result<()> {
-    let file = File::open(eve_path).context("Failed to open EVE JSON file")?;
-    let reader = BufReader::new(file);
+    info!("Processing {} Suricata alerts from live stream cache...", alerts.len());
 
-    info!("Processing Suricata EVE JSON (streaming)...");
-    let mut total_lines: usize = 0;
-    let mut alert_lines: usize = 0;
-    let mut _non_alert_lines: usize = 0;
-    let mut _parse_errors: usize = 0;
-
-    // We'll collect typed Alert entries only for true alert events.
-    // But we process them as we go (no big vector load).
-    for line_res in reader.lines() {
-        total_lines += 1;
-        let line = match line_res {
-            Ok(l) => l,
-            Err(e) => {
-                error!("Failed to read line {}: {}", total_lines, e);
-                continue;
-            }
-        };
-
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        // Fast early filter: check for "event_type":"alert" or the "alert" key.
-        // This avoids trying to deserialize non-alert types.
-        // Prefer JSON-based check for correctness.
-        let v: Value = match serde_json::from_str(&line) {
-            Ok(val) => val,
-            Err(e) => {
-                _parse_errors += 1;
-                error!(
-                    "Failed to parse JSON on line {}: {} -- content: {}",
-                    total_lines, e, &line
-                );
-                continue;
-            }
-        };
-
-        // If it's not an alert event, skip.
-        let is_alert = v
-            .get("event_type")
-            .and_then(|et| et.as_str())
-            .map(|s| s.eq_ignore_ascii_case("alert"))
-            .unwrap_or(false)
-            || v.get("alert").is_some();
-
-        if !is_alert {
-            _non_alert_lines += 1;
-            // Skipping non-alert event (debug logging reduced)
-            continue;
-        }
-
-        // Now we have an alert-like object; deserialize into your Alert struct.
-        let alert: Alert = match serde_json::from_value(v) {
-            Ok(a) => a,
-            Err(e) => {
-                _parse_errors += 1;
-                error!(
-                    "Failed to deserialize Alert at line {}: {} -- content: {}",
-                    total_lines, e, &line
-                );
-                continue;
-            }
-        };
-
-        alert_lines += 1;
-
-        // The rest of your existing logic for each alert:
-        // direct mapping by pcap_cnt
+    for alert in alerts {
+        // In live mode, pcap_cnt can be global and may not map to per-window packet index.
         if let Some(pcap_cnt) = alert.pcap_cnt {
-            malicious_packets.insert(pcap_cnt);
-            record_alert(filter_log, pcap_cnt, &alert);
-            continue;
+            let max_index = packet_index.len() as u64;
+            if pcap_cnt > 0 && pcap_cnt <= max_index {
+                malicious_packets.insert(pcap_cnt);
+                record_alert(filter_log, pcap_cnt, alert);
+            }
         }
 
-        // Flow-based mapping
+        let alert_flow = alert_to_flow(alert);
+
         if mode == "flow" {
-            if let (Ok(src_ip), Ok(dst_ip)) = (
-                alert.src_ip.get_ip().parse(),
-                alert.dest_ip.get_ip().parse(),
-            ) {
-                let flow = Flow {
-                    src_ip,
-                    dst_ip,
-                    src_port: alert.src_port,
-                    dst_port: alert.dest_port,
-                    protocol: protocol_str_to_num(&alert.proto),
-                };
+            if let Some(flow) = alert_flow {
                 malicious_flows.insert(flow);
             }
-            continue;
+        } else if let Some(alert_flow) = alert_flow {
+            for packet in packet_index {
+                if packet.flow == alert_flow {
+                    malicious_packets.insert(packet.index);
+                    record_alert(filter_log, packet.index, alert);
+                }
+            }
         }
-
-        // Time-based packet matching (fallback)
-        if let Ok(alert_time) = DateTime::parse_from_rfc3339(&alert.timestamp) {
-            match_packets_by_time(
-                packet_index,
-                malicious_packets,
-                filter_log,
-                &alert,
-                alert_time.timestamp() as u32,
-            );
-        } else {
-            // If timestamp parsing fails, you can optionally try other heuristics
-            warn!(
-                "Could not parse timestamp '{}' for alert (pcap_cnt: {:?})",
-                alert.timestamp, alert.pcap_cnt
-            );
-        }
-    }
-
-    if alert_lines > 0 {
-        info!(
-            "Processed {} alerts from {} EVE events",
-            alert_lines, total_lines
-        );
     }
 
     Ok(())
+}
+
+fn parse_suricata_timestamp_epoch(ts: &str) -> Option<i64> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(ts) {
+        return Some(dt.timestamp());
+    }
+
+    // Suricata commonly emits 2025-11-07T10:00:00.000000+0000 (without colon in tz)
+    DateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S%.f%z")
+        .ok()
+        .map(|dt| dt.timestamp())
 }
 
 fn protocol_str_to_num(proto: &str) -> u8 {
@@ -1310,26 +1448,23 @@ fn protocol_str_to_num(proto: &str) -> u8 {
     }
 }
 
-fn match_packets_by_time(
-    packet_index: &[PacketInfo],
-    malicious_packets: &mut HashSet<u64>,
-    filter_log: &mut Vec<FilterLog>,
-    alert: &Alert,
-    alert_ts: u32,
-) {
-    const TIME_WINDOW: u32 = 500; // milliseconds
+fn alert_to_flow(alert: &Alert) -> Option<Flow> {
+    let src_ip: IpAddr = alert.src_ip.as_ref()?.get_ip().parse().ok()?;
+    let dst_ip: IpAddr = alert.dest_ip.as_ref()?.get_ip().parse().ok()?;
 
-    for packet in packet_index {
-        if (packet.ts_sec as i64 - alert_ts as i64).abs() <= 1 {
-            // Check if packet is within +/- 500ms
-            let packet_ms = packet.ts_sec * 1000 + packet.ts_usec / 1000;
-            let alert_ms = alert_ts * 1000;
+    Some(Flow {
+        src_ip,
+        dst_ip,
+        src_port: alert.src_port,
+        dst_port: alert.dest_port,
+        protocol: protocol_str_to_num(&alert.proto),
+    })
+}
 
-            if (packet_ms as i64 - alert_ms as i64).abs() <= TIME_WINDOW as i64 {
-                malicious_packets.insert(packet.index);
-                record_alert(filter_log, packet.index, alert);
-            }
-        }
+fn format_alert_endpoint(ip: &Option<IpAddress>, port: u16) -> String {
+    match ip {
+        Some(v) => format!("{}:{}", v.get_ip(), port),
+        None => "-".to_string(),
     }
 }
 
@@ -1338,8 +1473,8 @@ fn record_alert(filter_log: &mut Vec<FilterLog>, packet_index: u64, alert: &Aler
         signature_id: alert.alert.signature_id,
         signature: alert.alert.signature.clone(),
         timestamp: alert.timestamp.clone(),
-        src: format!("{}:{}", alert.src_ip.get_ip(), alert.src_port),
-        dst: format!("{}:{}", alert.dest_ip.get_ip(), alert.dest_port),
+        src: format_alert_endpoint(&alert.src_ip, alert.src_port),
+        dst: format_alert_endpoint(&alert.dest_ip, alert.dest_port),
     };
 
     if let Some(existing) = filter_log

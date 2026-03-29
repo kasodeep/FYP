@@ -1,8 +1,8 @@
 [package]
-name = "parser"
+name = "snort_pipeline"
 version = "0.1.0"
-edition = "2024"
-description = "CLI tool to process Suricata alerts and split pcap files based on alerts"
+edition = "2021"
+description = "CLI tool to process Snort alerts and split pcap files based on alerts"
 authors = ["Your Name <your.email@example.com>"]
 
 [dependencies]
